@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo *)",
+      "Bash(git *)",
+      "Bash(ls *)",
+      "Bash(sqlite3 *)",
+      "WebFetch(docs.rs/*)",
+      "WebFetch(github.com/*)",
+      "WebFetch(crates.io/*)"
+    ]
+  }
+}

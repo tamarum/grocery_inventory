@@ -1,0 +1,16 @@
+# Grocery Inventory Configuration
+
+[database]
+# Path to the SQLite database file
+path = "grocery_inventory.db"
+
+[web]
+# Host and port for the web interface (requires --features web)
+host = "127.0.0.1"
+port = 3000
+
+[shopping]
+# Items at or below this quantity threshold appear on the shopping list
+low_stock_threshold = 2
+# Include items with quantity of zero
+include_out_of_stock = true

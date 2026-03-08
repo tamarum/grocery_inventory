@@ -1,0 +1,9 @@
+{
+  "skills": {
+    "tdd": {
+      "source": "mattpocock/skills",
+      "path": "tdd",
+      "version": "latest"
+    }
+  }
+}

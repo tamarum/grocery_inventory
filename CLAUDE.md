@@ -21,11 +21,12 @@ cargo build --features web       # Build with web server
 |---|---|---|
 | Config | `src/config.rs` | TOML config parsing with `thiserror` errors |
 | Item | `src/item.rs` | `GroceryItem` model + `ItemRepository` trait |
-| Database | `src/db.rs` | `SqliteRepository` — `Mutex<Connection>` impl of `ItemRepository` |
+| Location | `src/location.rs` | `Location` + `Shelf` models, `LocationRepository` + `ShelfRepository` traits |
+| Database | `src/db.rs` | `SqliteRepository` — `Mutex<Connection>` impl of all repository traits |
 | Shopping | `src/shopping.rs` | `ShoppingListGenerator` trait + `DefaultShoppingListGenerator` |
 | App | `src/app.rs` | `App<R, S>` — generic orchestration over repo + shopping |
-| Web | `src/web.rs` | Axum routes, feature-gated behind `web` |
-| CLI | `src/main.rs` | Clap subcommands: add, list, update, remove, shop, web |
+| Web | `src/web.rs` | Axum routes + mobile-responsive HTML, feature-gated behind `web` |
+| CLI | `src/main.rs` | Clap subcommands: add, list, update, remove, shop, location, shelf, web |
 
 ## Key Details
 

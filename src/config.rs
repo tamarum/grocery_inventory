@@ -17,6 +17,13 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub shopping: ShoppingConfig,
+    #[serde(default)]
+    pub anthropic: AnthropicConfig,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AnthropicConfig {
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

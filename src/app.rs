@@ -134,6 +134,7 @@ mod tests {
             },
             web: Default::default(),
             shopping: Default::default(),
+            anthropic: Default::default(),
         };
         App::new(repo, shopping, config)
     }

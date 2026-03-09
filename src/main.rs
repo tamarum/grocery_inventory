@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use grocery_inventory::app::App;
+use grocery_inventory::category::{suggest_category, suggest_expiration_date};
 use grocery_inventory::config::Config;
 use grocery_inventory::db::SqliteRepository;
 use grocery_inventory::item::GroceryItem;
@@ -48,6 +50,9 @@ enum Commands {
         /// Shelf ID (auto-sets location from shelf's parent)
         #[arg(long)]
         shelf: Option<i64>,
+        /// Expiration date (YYYY-MM-DD)
+        #[arg(long, value_parser = parse_date)]
+        expires: Option<NaiveDate>,
     },
     /// List all items in inventory
     List,
@@ -70,6 +75,9 @@ enum Commands {
         /// Shelf ID (auto-sets location from shelf's parent; use 0 to clear)
         #[arg(long)]
         shelf: Option<i64>,
+        /// Expiration date (YYYY-MM-DD, use "none" to clear)
+        #[arg(long, value_parser = parse_date_or_none)]
+        expires: Option<Option<NaiveDate>>,
     },
     /// Remove an item from inventory
     Remove {
@@ -133,6 +141,18 @@ enum ShelfCommands {
     },
 }
 
+fn parse_date(s: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|e| format!("invalid date '{s}': {e}"))
+}
+
+fn parse_date_or_none(s: &str) -> Result<Option<NaiveDate>, String> {
+    if s.eq_ignore_ascii_case("none") || s == "0" {
+        Ok(None)
+    } else {
+        parse_date(s).map(Some)
+    }
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -156,11 +176,13 @@ fn main() -> Result<()> {
             min_stock,
             location,
             shelf,
+            expires,
         } => {
-            let mut item = GroceryItem::new(name, quantity, unit);
-            item.category = category;
+            let mut item = GroceryItem::new(&name, quantity, unit);
+            item.category = category.or_else(|| suggest_category(&name).map(String::from));
             item.minimum_stock = min_stock;
             item.location_id = location;
+            item.expiration_date = expires.or_else(|| suggest_expiration_date(&name));
             let id = if let Some(sid) = shelf {
                 app.add_item_to_shelf(&mut item, sid)?
             } else {
@@ -172,15 +194,16 @@ fn main() -> Result<()> {
             let items = app.list_items()?;
             let locations = app.list_locations()?;
             let shelves = app.list_all_shelves()?;
+            let today = chrono::Local::now().date_naive();
             if items.is_empty() {
                 println!("Inventory is empty.");
             } else {
                 println!(
-                    "{:<5} {:<20} {:<8} {:<10} {:<15} {:<15} {:<15}",
-                    "ID", "Name", "Qty", "Unit", "Category", "Location", "Shelf"
+                    "{:<5} {:<20} {:<8} {:<10} {:<15} {:<15} {:<15} {:<12}",
+                    "ID", "Name", "Qty", "Unit", "Category", "Location", "Shelf", "Expires"
                 );
-                println!("{:-<90}", "");
-                for item in items {
+                println!("{:-<102}", "");
+                for item in &items {
                     let loc_name = item
                         .location_id
                         .and_then(|lid| locations.iter().find(|l| l.id == Some(lid)))
@@ -191,8 +214,23 @@ fn main() -> Result<()> {
                         .and_then(|sid| shelves.iter().find(|s| s.id == Some(sid)))
                         .map(|s| s.name.as_str())
                         .unwrap_or("-");
+                    let expires_str = match item.expiration_date {
+                        Some(date) => {
+                            let days = (date - today).num_days();
+                            if days < 0 {
+                                format!("{} EXPIRED", date.format("%Y-%m-%d"))
+                            } else if days <= 3 {
+                                format!("{} !!!", date.format("%Y-%m-%d"))
+                            } else if days <= 7 {
+                                format!("{} !", date.format("%Y-%m-%d"))
+                            } else {
+                                format!("{}", date.format("%Y-%m-%d"))
+                            }
+                        }
+                        None => "-".to_string(),
+                    };
                     println!(
-                        "{:<5} {:<20} {:<8} {:<10} {:<15} {:<15} {:<15}",
+                        "{:<5} {:<20} {:<8} {:<10} {:<15} {:<15} {:<15} {}",
                         item.id.unwrap_or(0),
                         item.name,
                         item.quantity,
@@ -200,6 +238,42 @@ fn main() -> Result<()> {
                         item.category.as_deref().unwrap_or("-"),
                         loc_name,
                         shelf_name,
+                        expires_str,
+                    );
+                }
+
+                // Summary of expiring items
+                let expired: Vec<_> = items
+                    .iter()
+                    .filter(|i| i.expiration_date.is_some_and(|d| d < today))
+                    .collect();
+                let expiring_soon: Vec<_> = items
+                    .iter()
+                    .filter(|i| {
+                        i.expiration_date
+                            .is_some_and(|d| d >= today && (d - today).num_days() <= 3)
+                    })
+                    .collect();
+                if !expired.is_empty() {
+                    println!(
+                        "\nWARNING: {} item(s) EXPIRED: {}",
+                        expired.len(),
+                        expired
+                            .iter()
+                            .map(|i| i.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                if !expiring_soon.is_empty() {
+                    println!(
+                        "ALERT: {} item(s) expiring within 3 days: {}",
+                        expiring_soon.len(),
+                        expiring_soon
+                            .iter()
+                            .map(|i| i.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     );
                 }
             }
@@ -211,6 +285,7 @@ fn main() -> Result<()> {
             category,
             location,
             shelf,
+            expires,
         } => {
             let mut item = app.get_item(id)?;
             if let Some(q) = quantity {
@@ -221,6 +296,9 @@ fn main() -> Result<()> {
             }
             if let Some(c) = category {
                 item.category = Some(c);
+            }
+            if let Some(exp) = expires {
+                item.expiration_date = exp;
             }
             if let Some(lid) = location {
                 item.location_id = if lid == 0 { None } else { Some(lid) };

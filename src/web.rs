@@ -12,9 +12,11 @@ pub mod routes {
     use std::sync::Arc;
 
     use crate::app::App;
+    use crate::category::{suggest_category, suggest_expiration_date};
     use crate::db::SqliteRepository;
     use crate::item::{GroceryItem, ItemError};
     use crate::location::{Location, Shelf};
+    use crate::receipt::scanner;
     use crate::shopping::DefaultShoppingListGenerator;
 
     type SharedApp = Arc<App<SqliteRepository, DefaultShoppingListGenerator>>;
@@ -33,31 +35,51 @@ pub mod routes {
     }
 
     impl ItemRequest {
+        fn auto_fill(self) -> Self {
+            let category = if self.category.is_some() {
+                self.category
+            } else {
+                suggest_category(&self.name).map(String::from)
+            };
+            let expiration_date = if self.expiration_date.is_some() {
+                self.expiration_date
+            } else {
+                suggest_expiration_date(&self.name)
+            };
+            Self {
+                category,
+                expiration_date,
+                ..self
+            }
+        }
+
         fn into_item(self) -> GroceryItem {
+            let req = self.auto_fill();
             GroceryItem {
                 id: None,
-                name: self.name,
-                quantity: self.quantity,
-                unit: self.unit,
-                category: self.category,
-                expiration_date: self.expiration_date,
-                minimum_stock: self.minimum_stock,
-                location_id: self.location_id,
-                shelf_id: self.shelf_id,
+                name: req.name,
+                quantity: req.quantity,
+                unit: req.unit,
+                category: req.category,
+                expiration_date: req.expiration_date,
+                minimum_stock: req.minimum_stock,
+                location_id: req.location_id,
+                shelf_id: req.shelf_id,
             }
         }
 
         fn into_item_with_id(self, id: i64) -> GroceryItem {
+            let req = self.auto_fill();
             GroceryItem {
                 id: Some(id),
-                name: self.name,
-                quantity: self.quantity,
-                unit: self.unit,
-                category: self.category,
-                expiration_date: self.expiration_date,
-                minimum_stock: self.minimum_stock,
-                location_id: self.location_id,
-                shelf_id: self.shelf_id,
+                name: req.name,
+                quantity: req.quantity,
+                unit: req.unit,
+                category: req.category,
+                expiration_date: req.expiration_date,
+                minimum_stock: req.minimum_stock,
+                location_id: req.location_id,
+                shelf_id: req.shelf_id,
             }
         }
     }
@@ -104,12 +126,86 @@ pub mod routes {
             .route("/api/shelves", get(list_all_shelves))
             .route("/api/shelves/:id", get(get_shelf).delete(remove_shelf))
             .route("/api/shopping", get(shopping_list))
+            .route("/api/suggest-category", get(suggest_category_endpoint))
+            .route(
+                "/api/receipt/scan",
+                axum::routing::post(scan_receipt_endpoint),
+            )
             .route("/health", get(health))
             .with_state(app)
     }
 
     async fn health() -> &'static str {
         "ok"
+    }
+
+    #[derive(Deserialize)]
+    struct SuggestCategoryQuery {
+        name: String,
+    }
+
+    #[derive(serde::Serialize)]
+    struct ItemSuggestion {
+        category: Option<&'static str>,
+        expiration_date: Option<NaiveDate>,
+    }
+
+    async fn suggest_category_endpoint(
+        axum::extract::Query(query): axum::extract::Query<SuggestCategoryQuery>,
+    ) -> Json<ItemSuggestion> {
+        Json(ItemSuggestion {
+            category: suggest_category(&query.name),
+            expiration_date: suggest_expiration_date(&query.name),
+        })
+    }
+
+    async fn scan_receipt_endpoint(
+        State(app): State<SharedApp>,
+        mut multipart: axum::extract::Multipart,
+    ) -> impl IntoResponse {
+        let api_key = match &app.config.anthropic.api_key {
+            Some(key) => key.clone(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "Anthropic API key not configured. Add [anthropic] api_key to config.toml",
+                )
+                    .into_response()
+            }
+        };
+
+        let mut image_bytes = Vec::new();
+        let mut media_type = String::new();
+
+        while let Ok(Some(field)) = multipart.next_field().await {
+            if field.name() == Some("receipt") {
+                media_type = field.content_type().unwrap_or("image/jpeg").to_string();
+                match field.bytes().await {
+                    Ok(bytes) => image_bytes = bytes.to_vec(),
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            format!("Failed to read upload: {e}"),
+                        )
+                            .into_response()
+                    }
+                }
+                break;
+            }
+        }
+
+        if image_bytes.is_empty() {
+            return (StatusCode::BAD_REQUEST, "No receipt image uploaded").into_response();
+        }
+
+        if let Err(e) = scanner::validate_image(&image_bytes, &media_type) {
+            return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        }
+
+        match scanner::scan_receipt(&api_key, &image_bytes, &media_type).await {
+            Ok(items) => Json(items).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
     }
 
     async fn index_html() -> Html<&'static str> {
@@ -230,6 +326,17 @@ pub mod routes {
 </div>
 
 <div id="batch" class="panel">
+  <div style="margin-bottom:.75rem;">
+    <label class="btn btn-primary" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer;">
+      Scan Receipt
+      <input type="file" id="receipt-input" accept="image/*" capture="environment"
+             onchange="scanReceipt(this)" style="display:none">
+    </label>
+    <span id="receipt-status" style="margin-left:.75rem;color:#888;"></span>
+  </div>
+  <div id="receipt-preview" style="display:none;margin-bottom:.75rem;">
+    <img id="receipt-img" style="max-width:100%;max-height:200px;border-radius:4px;border:1px solid #ddd;">
+  </div>
   <div class="batch-controls">
     <button class="btn btn-primary" onclick="addBatchRow()">+ Add Row</button>
     <button class="btn btn-primary" onclick="submitBatch()">Submit All</button>
@@ -401,7 +508,38 @@ function editItem(item) {
   document.getElementById('submit-btn').textContent = 'Update Item';
 }
 
+// Auto-suggest category when name changes
+let _catSuggestTimer;
+document.getElementById('f-name').addEventListener('input', function() {
+  clearTimeout(_catSuggestTimer);
+  const catField = document.getElementById('f-cat');
+  if (catField.dataset.userEdited === 'true') return;
+  const name = this.value.trim();
+  if (!name) { catField.value = ''; return; }
+  _catSuggestTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/suggest-category?name=' + encodeURIComponent(name));
+      const data = await res.json();
+      if (data.category && !catField.dataset.userEdited) {
+        catField.value = data.category;
+      }
+      const expField = document.getElementById('f-exp');
+      if (data.expiration_date && !expField.dataset.userEdited) {
+        expField.value = data.expiration_date;
+      }
+    } catch(e) {}
+  }, 300);
+});
+document.getElementById('f-cat').addEventListener('input', function() {
+  this.dataset.userEdited = this.value ? 'true' : '';
+});
+document.getElementById('f-exp').addEventListener('input', function() {
+  this.dataset.userEdited = this.value ? 'true' : '';
+});
+
 function resetForm() {
+  document.getElementById('f-cat').dataset.userEdited = '';
+  document.getElementById('f-exp').dataset.userEdited = '';
   document.getElementById('item-form').reset();
   document.getElementById('edit-id').value = '';
   document.getElementById('f-min').value = '0';
@@ -465,6 +603,58 @@ async function loadShopping() {
         ${e.category ? '<span style="color:#888"> [' + esc(e.category) + ']</span>' : ''}
       </div>`).join('');
   } catch (e) { flash('Failed to load shopping list', false); }
+}
+
+async function scanReceipt(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('receipt-img').src = e.target.result;
+    document.getElementById('receipt-preview').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  const status = document.getElementById('receipt-status');
+  status.textContent = 'Scanning receipt...';
+  status.style.color = '#888';
+
+  const formData = new FormData();
+  formData.append('receipt', file);
+
+  try {
+    const res = await fetch('/api/receipt/scan', { method: 'POST', body: formData });
+    if (!res.ok) throw new Error(await res.text());
+    const items = await res.json();
+
+    if (items.length === 0) {
+      status.textContent = 'No items found on receipt.';
+      status.style.color = '#c0392b';
+      input.value = '';
+      return;
+    }
+
+    document.getElementById('batch-body').innerHTML = '';
+    await loadLocations();
+    items.forEach(item => {
+      addBatchRow();
+      const row = document.getElementById('batch-body').lastElementChild;
+      const inputs = row.querySelectorAll('input');
+      inputs[0].value = item.name || '';
+      inputs[1].value = item.quantity || 1;
+      inputs[2].value = item.unit || 'count';
+      inputs[3].value = item.category || '';
+      if (item.expiration_date) inputs[4].value = item.expiration_date;
+    });
+
+    status.textContent = items.length + ' item(s) found. Review and submit below.';
+    status.style.color = '#155724';
+  } catch (e) {
+    status.textContent = 'Scan failed: ' + e.message;
+    status.style.color = '#c0392b';
+  }
+  input.value = '';
 }
 
 function initBatch() {
@@ -855,6 +1045,7 @@ async function deleteLocation(id) {
                 },
                 web: Default::default(),
                 shopping: Default::default(),
+                anthropic: Default::default(),
             };
             Arc::new(App::new(repo, shopping, config))
         }

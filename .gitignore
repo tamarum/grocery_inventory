@@ -24,5 +24,8 @@ config.toml
 .DS_Store
 Thumbs.db
 
+# Test data
+receipt-images/
+
 # Dolt database files (added by bd init)
 .dolt/

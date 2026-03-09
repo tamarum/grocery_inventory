@@ -1,4 +1,5 @@
 use crate::item::{ItemError, ItemRepository};
+use chrono::NaiveDate;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -8,6 +9,7 @@ pub struct ShoppingEntry {
     pub suggested_quantity: u32,
     pub unit: String,
     pub category: Option<String>,
+    pub expiring: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,12 +33,13 @@ impl std::fmt::Display for ShoppingList {
             return writeln!(f, "Shopping list is empty - you're fully stocked!");
         }
         writeln!(f, "Shopping List ({} items):", self.entries.len())?;
-        writeln!(f, "{:-<40}", "")?;
+        writeln!(f, "{:-<50}", "")?;
         for entry in &self.entries {
+            let tag = if entry.expiring { " [EXPIRING]" } else { "" };
             writeln!(
                 f,
-                "  [ ] {} - need {} {} (have {})",
-                entry.name, entry.suggested_quantity, entry.unit, entry.current_quantity
+                "  [ ] {} - need {} {} (have {}){}",
+                entry.name, entry.suggested_quantity, entry.unit, entry.current_quantity, tag
             )?;
         }
         Ok(())
@@ -62,25 +65,48 @@ impl ShoppingListGenerator for DefaultShoppingListGenerator {
         include_out_of_stock: bool,
     ) -> Result<ShoppingList, ItemError> {
         let low_stock_items = repo.find_low_stock(threshold)?;
+        let today = chrono::Local::now().date_naive();
+        let expiry_horizon = today + chrono::Duration::days(3);
 
-        let entries = low_stock_items
+        let mut entries: Vec<ShoppingEntry> = low_stock_items
             .into_iter()
             .filter(|item| include_out_of_stock || item.quantity > 0)
             .map(|item| {
                 let target = std::cmp::max(item.minimum_stock, threshold + 1);
                 let suggested = target.saturating_sub(item.quantity);
+                let expiring = is_expiring(&item.expiration_date, expiry_horizon);
                 ShoppingEntry {
                     name: item.name,
                     current_quantity: item.quantity,
                     suggested_quantity: suggested,
                     unit: item.unit,
                     category: item.category,
+                    expiring,
                 }
             })
             .collect();
 
+        // Also add items that are expiring/expired but not already low stock
+        let all_items = repo.list()?;
+        for item in all_items {
+            if is_expiring(&item.expiration_date, expiry_horizon) && !item.is_low_stock(threshold) {
+                entries.push(ShoppingEntry {
+                    name: item.name,
+                    current_quantity: item.quantity,
+                    suggested_quantity: item.quantity,
+                    unit: item.unit,
+                    category: item.category,
+                    expiring: true,
+                });
+            }
+        }
+
         Ok(ShoppingList { entries })
     }
+}
+
+fn is_expiring(date: &Option<NaiveDate>, horizon: NaiveDate) -> bool {
+    date.is_some_and(|d| d <= horizon)
 }
 
 #[cfg(test)]
@@ -133,10 +159,41 @@ mod tests {
                 suggested_quantity: 3,
                 unit: "gallons".to_string(),
                 category: None,
+                expiring: false,
             }],
         };
         let output = format!("{list}");
         assert!(output.contains("Milk"));
         assert!(output.contains("need 3 gallons"));
+    }
+
+    #[test]
+    fn display_expiring_tag() {
+        let list = ShoppingList {
+            entries: vec![ShoppingEntry {
+                name: "Yogurt".to_string(),
+                current_quantity: 2,
+                suggested_quantity: 2,
+                unit: "cups".to_string(),
+                category: None,
+                expiring: true,
+            }],
+        };
+        let output = format!("{list}");
+        assert!(output.contains("[EXPIRING]"));
+    }
+
+    #[test]
+    fn expiring_items_added_to_shopping_list() {
+        let repo = SqliteRepository::in_memory().unwrap();
+        let mut item = GroceryItem::new("Milk", 10, "gallons");
+        item.expiration_date = Some(chrono::Local::now().date_naive());
+        repo.add(&item).unwrap();
+
+        let generator = DefaultShoppingListGenerator;
+        let list = generator.generate(&repo, 2, true).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list.entries[0].expiring);
+        assert_eq!(list.entries[0].name, "Milk");
     }
 }

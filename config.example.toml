@@ -14,3 +14,7 @@ port = 3000
 low_stock_threshold = 2
 # Include items with quantity of zero
 include_out_of_stock = true
+
+# [anthropic]
+# # API key for receipt scanning via Claude Vision (optional)
+# api_key = "sk-ant-..."

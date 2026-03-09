@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "grocery_inventory",
+  "project_id": "36416897-8f26-4e3e-af99-a02b448e39b7"
+}

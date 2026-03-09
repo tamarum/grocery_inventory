@@ -6,7 +6,11 @@ A home grocery inventory system with CLI and web interfaces. Track what's in you
 
 - **Multi-location tracking** — manage multiple fridges, freezers, pantries with temperature data
 - **Shelf-level organization** — assign items to specific shelves within each location
-- **Shopping list generation** — automatically flags low-stock items based on per-item minimums
+- **Expiration tracking** — warnings for expired and expiring items in CLI and web UI
+- **Auto-fill categories** — automatically categorizes items (20+ groups) as you type
+- **Auto-fill expiration dates** — estimates shelf life for 60+ item types
+- **Receipt scanning** — photograph a grocery receipt and batch-import items via Claude Vision API
+- **Shopping list generation** — flags low-stock and expiring items with suggested quantities
 - **Web UI** — mobile-friendly single-page app with card layout for phones
 - **CLI** — full-featured command-line interface for scripting and quick access
 - **REST API** — JSON endpoints for all operations
@@ -29,10 +33,13 @@ cargo run --features web -- -c config.toml web
 ## CLI Usage
 
 ```bash
-# Items
+# Items (category and expiration auto-fill when not specified)
 cargo run -- -c config.toml add "Milk" -q 2 -u gallons --shelf 1
+cargo run -- -c config.toml add "Chicken Breast" -q 1 -u lbs --expires 2026-03-15
 cargo run -- -c config.toml list
 cargo run -- -c config.toml update 1 -q 5
+cargo run -- -c config.toml update 1 --expires 2026-04-01
+cargo run -- -c config.toml update 1 --expires none  # clear expiration
 cargo run -- -c config.toml remove 1
 
 # Locations
@@ -43,7 +50,7 @@ cargo run -- -c config.toml location list
 cargo run -- -c config.toml shelf add 1 --name "Top Shelf"
 cargo run -- -c config.toml shelf list 1
 
-# Shopping list
+# Shopping list (includes expiring items)
 cargo run -- -c config.toml shop
 ```
 
@@ -62,6 +69,9 @@ port = 3000
 [shopping]
 low_stock_threshold = 0
 include_out_of_stock = true
+
+[anthropic]
+api_key = "sk-ant-..."  # Optional: enables receipt scanning via Claude Vision
 ```
 
 ## Data Model
@@ -104,6 +114,7 @@ cargo test --all-features                    # All tests (including web)
 - [CLI Reference](docs/cli.md)
 - [API Reference](docs/api.md)
 - [Architecture](docs/architecture.md)
+- [Roadmap](ROADMAP.md)
 
 ## Tech Stack
 

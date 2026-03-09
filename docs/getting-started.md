@@ -59,7 +59,12 @@ port = 3000
 [shopping]
 low_stock_threshold = 0   # Items at or below this qty appear on shopping list
 include_out_of_stock = true
+
+[anthropic]
+api_key = "sk-ant-..."  # Optional: enables receipt scanning via Claude Vision
 ```
+
+The `[anthropic]` section is optional. Without it, all features work except receipt scanning.
 
 ## Remote Access
 

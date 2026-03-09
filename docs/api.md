@@ -162,11 +162,62 @@ Returns: `200` with JSON:
       "current_quantity": 1,
       "suggested_quantity": 2,
       "unit": "box",
-      "category": "Spices"
+      "category": "Spices",
+      "expiring": false
     }
   ]
 }
 ```
+
+Items expiring within 3 days are automatically included with `"expiring": true`, even if they are not low stock.
+
+## Item Suggestions
+
+```
+GET /api/suggest-category?name=Chicken+Breast
+```
+
+Returns: `200` with JSON:
+
+```json
+{
+  "category": "Meat & Poultry",
+  "expiration_date": "2026-03-13"
+}
+```
+
+Suggests a category and estimated expiration date based on the item name. Used by the web UI for real-time auto-fill. Returns `null` for fields that cannot be determined.
+
+## Receipt Scanning
+
+```
+POST /api/receipt/scan
+Content-Type: multipart/form-data
+
+receipt: <image file>
+```
+
+Uploads a receipt image and extracts grocery items using the Claude Vision API. Requires `[anthropic] api_key` in config.
+
+Supported image types: JPEG, PNG, WebP, GIF (max 5MB).
+
+Returns: `200` with JSON array:
+
+```json
+[
+  {
+    "name": "Whole Milk",
+    "quantity": 2,
+    "unit": "gallons",
+    "category": "Dairy",
+    "expiration_date": "2026-03-18"
+  }
+]
+```
+
+Items are automatically enriched with category and expiration date suggestions. Fractional weights are converted (e.g., 0.776 kg becomes 776 g).
+
+Returns `400` if no API key is configured or the image is invalid.
 
 ## Health Check
 

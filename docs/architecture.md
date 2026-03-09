@@ -4,11 +4,13 @@
 
 ```
 src/
-  config.rs    — TOML config parsing
+  config.rs    — TOML config parsing (database, web, shopping, anthropic)
   item.rs      — GroceryItem model, ItemError, ItemRepository trait
   location.rs  — Location model, Shelf model, LocationRepository/ShelfRepository traits
   db.rs        — SqliteRepository (implements all repository traits)
-  shopping.rs  — ShoppingListGenerator trait + DefaultShoppingListGenerator
+  category.rs  — Auto-categorization + shelf-life estimation from item names
+  shopping.rs  — ShoppingListGenerator trait + expiration-aware DefaultShoppingListGenerator
+  receipt.rs   — Receipt scanning via Claude Vision API (feature-gated: "web")
   app.rs       — App<R, S> orchestration layer (generic over repo + shopping)
   main.rs      — CLI (clap subcommands)
   web.rs       — Axum web server + HTML frontend (feature-gated: "web")
@@ -45,9 +47,27 @@ Location (1) ──< Shelf (many)
 
 `App<R, S>` is generic over its repository and shopping list generator. Shelf methods are available via a separate `impl` block bounded on `R: ItemRepository + LocationRepository + ShelfRepository`.
 
+### Auto-fill intelligence
+
+The `category` module contains two lookup tables:
+- **Category rules** — maps item name keywords to 20+ grocery categories (Dairy, Produce, Meat & Poultry, etc.)
+- **Shelf life rules** — maps item name keywords to typical shelf life in days (60+ item types)
+
+Both are used in the CLI (on add), web API (on create/update), and receipt scanning (post-processing).
+
+### Receipt scanning pipeline
+
+The `receipt` module (feature-gated behind `web`) handles receipt image processing:
+1. Image upload via multipart form data
+2. Validation (size, type)
+3. Base64 encoding and Claude Vision API call
+4. JSON response parsing with fallback for markdown fences and surrounding text
+5. Fractional quantity conversion (kg→g, lb→oz)
+6. Category and expiration enrichment from the local lookup tables
+
 ### Feature-gated web module
 
-The `web` feature gates axum/tower-http dependencies. The web module is compiled only when `--features web` is passed. This keeps the CLI binary small when the web UI isn't needed.
+The `web` feature gates axum/tower-http/reqwest/base64 dependencies. The web module is compiled only when `--features web` is passed. This keeps the CLI binary small when the web UI isn't needed.
 
 ### Thread safety
 

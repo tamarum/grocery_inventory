@@ -6,6 +6,10 @@ use thiserror::Error;
 pub enum ItemError {
     #[error("item not found: {0}")]
     NotFound(i64),
+    #[error("location not found: {0}")]
+    LocationNotFound(i64),
+    #[error("shelf not found: {0}")]
+    ShelfNotFound(i64),
     #[error("database error: {0}")]
     Database(String),
 }
@@ -19,6 +23,8 @@ pub struct GroceryItem {
     pub category: Option<String>,
     pub expiration_date: Option<NaiveDate>,
     pub minimum_stock: u32,
+    pub location_id: Option<i64>,
+    pub shelf_id: Option<i64>,
 }
 
 impl GroceryItem {
@@ -31,6 +37,8 @@ impl GroceryItem {
             category: None,
             expiration_date: None,
             minimum_stock: 0,
+            location_id: None,
+            shelf_id: None,
         }
     }
 
